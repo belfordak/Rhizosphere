@@ -1,0 +1,82 @@
+---
+title: "1F - Rhizosphere - Heatmaps"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+  html_document:
+    code_folding: hide
+    highlight: espresso
+    lib_dir: libs
+    self_contained: no
+    theme: spacelab
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+date: '`r date()`'
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, warning=FALSE, message=FALSE, dev='png', fig.width=10)
+options(scipen=999)
+```
+
+# Load Packages
+
+```{r}
+library("RColorBrewer")
+library("phyloseq")
+library("ape")
+library("plyr")
+library("dplyr")
+library("ggplot2")
+library("gridExtra")
+library("reshape2")
+library("treeio")
+
+
+theme_set(theme_bw())
+getPalette = colorRampPalette(brewer.pal(9, "Set1"))
+bluePalette = colorRampPalette(brewer.pal(8, "Blues"))
+
+load("~/Research/SMU/Rhizosphere/phyloObjects.Rda")
+```
+
+# Phyloseq Heatmap
+
+```{r}
+phyloTemp = filter_taxa(phyloTom.100, function(x) sum(x >= 0.1) >= (8), TRUE)
+plot_heatmap(phyloTemp)
+```
+
+# ggtree
+
+```{r}
+library("ggtree")
+library("phytools")
+
+phyloTemp = filter_taxa(phyloTom.100, function(x) sum(x >= 0.1) >= (8), TRUE)
+
+tree = phy_tree(phyloTemp)
+tree = midpoint.root(tree)
+
+df = as.data.frame(tax_table(phyloTemp))
+df$taxa = row.names(df)
+row.names(df) <- NULL
+df = select(df, taxa, family, phylum)
+
+# tree
+forHeatmap = as.data.frame(otu_table(phyloTemp))
+p = ggtree(tree)
+p <-data.frame(geom_tiplab(size=5, align=TRUE, linesize=1.5, aes(color = family)) + 
+    scale_color_manual(values = getPalette(11)))
+
+# sort by name
+
+gheatmap(p, forHeatmap,font.size = 1.2,offset=0.1) + 
+    scale_fill_gradientn(colours=c("white","navyblue","red"))
+
+
+library("pheatmap")
+pheatmap(forHeatmap)
+```

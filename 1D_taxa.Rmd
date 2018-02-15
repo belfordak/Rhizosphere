@@ -1,0 +1,171 @@
+---
+title: "1D - Rhizosphere - Taxonomy"
+date: "`r date()`"
+output: 
+  html_document:
+    lib_dir: libs
+    code_folding: hide
+    theme: spacelab
+    highlight: espresso
+    self_contained: no
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, warning=FALSE, message=FALSE, dev='png', fig.width=10)
+options(scipen=999)
+```
+
+# Load Packages
+
+```{r}
+library("RColorBrewer")
+library("phyloseq")
+library("ape")
+library("dplyr")
+library("ggplot2")
+library("gridExtra")
+library("xlsx")
+library("reshape2")
+library("vegan")
+library("ade4")
+
+theme_set(theme_bw())
+getPalette = colorRampPalette(brewer.pal(9, "Set1"))
+bluePalette = colorRampPalette(brewer.pal(8, "Blues"))
+
+load("~/Research/SMU/Rhizosphere/phyloObjects.Rda")
+```
+
+
+# Functions
+
+```{r}
+
+## Gives count, mean, standard deviation, standard error of the mean, and confidence interval (default 95%).
+##   data: a data frame.
+##   measurevar: the name of a column that contains the variable to be summariezed
+##   groupvars: a vector containing names of columns that contain grouping variables
+##   na.rm: a boolean that indicates whether to ignore NA's
+##   conf.interval: the percent range of the confidence interval (default is 95%)
+# from http://www.cookbook-r.com/Graphs/Plotting_means_and_error_bars_(ggplot2)/
+summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+  library(plyr)
+  
+  # New version of length which can handle NA's: if na.rm==T, don't count them
+  length2 <- function (x, na.rm=FALSE) {
+    if (na.rm) sum(!is.na(x))
+    else       length(x)
+  }
+  
+  # This does the summary. For each group's data frame, return a vector with
+  # N, mean, and sd
+  datac <- ddply(data, groupvars, .drop=.drop,
+                 .fun = function(xx, col) {
+                   c(N    = length2(xx[[col]], na.rm=na.rm),
+                     mean = mean   (xx[[col]], na.rm=na.rm),
+                     sd   = sd     (xx[[col]], na.rm=na.rm)
+                   )
+                 },
+                 measurevar
+  )
+  
+  # Rename the "mean" column    
+  #datac <- rename(datac, c("mean" = measurevar))
+  
+  datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+  
+  # Confidence interval multiplier for standard error
+  # Calculate t-statistic for confidence interval: 
+  # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+  ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+  datac$ci <- datac$se * ciMult
+  
+  return(datac)
+}
+
+```
+
+# Phylum
+
+```{r}
+phylumGlom = tax_glom(phyloTom.100, "phylum")
+phylumGlom = filter_taxa(phylumGlom, function(x) sum(x >= 1) >= (1), TRUE)
+
+plot_bar(phylumGlom, fill = "phylum") +
+  facet_wrap(TREATMENT ~ LOCATION, scales = "free_x") +
+  scale_fill_manual(values = getPalette(11))
+```
+
+## Proteobacteria
+
+```{r}
+phyloTom.proteobacteria = subset_taxa(phyloTom.100, phylum == "Proteobacteria")
+
+classGlom = tax_glom(phyloTom.proteobacteria, "class")
+classGlom = filter_taxa(classGlom, function(x) sum(x >= 1) >= (1), TRUE)
+
+plot_bar(classGlom, fill = "class") +
+  facet_wrap(~class, scales = "free_y") +
+  scale_fill_manual(values = getPalette(11))
+```
+
+## Firmicutes
+
+```{r}
+phyloTom.firmicutes = subset_taxa(phyloTom.100, phylum == "Firmicutes")
+
+classGlom = tax_glom(phyloTom.firmicutes, "class")
+
+plot_bar(classGlom, fill = "class") +
+  facet_wrap(~class, scales = "free_y") +
+  scale_fill_manual(values = getPalette(11))
+```
+
+## Who's in there
+
+```{r}
+phyloTom.firmicutes.1percent = filter_taxa(phyloTom.firmicutes, function(x) sum(x >= 1) >= (1), TRUE)
+
+plot_bar(phyloTom.firmicutes.1percent, fill = "genus")
+```
+
+## Verrucomicrobia
+
+```{r}
+df = psmelt(phyloTom.100)
+
+df = filter(df, phylum == "Verrucomicrobia")
+df.agg = aggregate(Abundance ~ class + TREATMENT + LOCATION + SAMPLE, data = df, sum)
+df.SE = summarySE(df.agg, measurevar = "Abundance", groupvars = c("TREATMENT", "LOCATION", "class"))
+
+
+ggplot(df.SE, aes(x = TREATMENT, y = mean)) +
+  geom_col(position = "dodge", aes(fill = TREATMENT)) +
+  facet_wrap(LOCATION~class, scales = "free") +
+  scale_fill_manual(values = getPalette(2)) +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd), width = 0.7) +
+  theme(legend.position = "none") +
+  theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5))
+```
+
+## Firmicutes
+
+```{r}
+phyloTom.verrucomicrobia = subset_taxa(phyloTom.100, phylum == "Verrucomicrobia")
+
+classGlom = tax_glom(phyloTom.verrucomicrobia, "class")
+
+plot_bar(classGlom, fill = "class") +
+  facet_wrap(~class, scales = "free_y") +
+  scale_fill_manual(values = getPalette(11))
+```
+
+# Session Info
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,132 @@
+---
+title: "1F - Rhizosphere - Network Analysis"
+date: "`r date()`"
+output: 
+  html_document:
+    lib_dir: libs
+    code_folding: hide
+    theme: spacelab
+    highlight: espresso
+    self_contained: no
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, warning=FALSE, message=FALSE, dev='png', fig.width=10)
+options(scipen=999)
+```
+
+# Load Packages
+
+```{r}
+library("RColorBrewer")
+library("phyloseq")
+library("ape")
+library("plyr")
+library("dplyr")
+library("ggplot2")
+library("gridExtra")
+library("reshape2")
+library("phangorn")
+library("Hmisc")
+library("igraph")
+
+theme_set(theme_bw())
+getPalette = colorRampPalette(brewer.pal(9, "Set1"))
+bluePalette = colorRampPalette(brewer.pal(8, "Blues"))
+
+load("~/Research/SMU/Rhizosphere/phyloObjects.Rda")
+```
+
+# Make Network
+
+```{r}
+phyloTemp = phyloTom
+phyloTemp = filter_taxa(phyloTemp, function(x) sum(x >= 50) >= (8), TRUE)
+matrix = data.frame(otu_table(phyloTemp), check.names = F)
+matrix = t(matrix)
+
+sequenceCor = cor(matrix)
+sequencePval = rcorr(as.matrix(matrix))$P
+
+sequenceCor.df = melt(sequenceCor)
+sequencePval.df = melt(sequencePval)
+
+colnames(sequenceCor.df) <- c("X","Y","value")
+colnames(sequencePval.df) <- c("X","Y","p")
+sequenceDF = merge(sequenceCor.df,sequencePval.df)
+sequenceDF = filter(sequenceDF,X != Y) # remove self correlations
+
+sequenceDF$BH = p.adjust(sequenceDF$p, method = "BH")
+correlation = filter(sequenceDF, BH < 0.05)
+
+el = select(correlation,X,Y,value)
+el = filter(el, abs(value) >= 0.9) # Pearson Correlation Cutoff (or `value <= -0.2`)
+el[,1]=as.character(el[,1])
+el[,2]=as.character(el[,2])
+el=as.matrix(el)
+
+graph = graph_from_edgelist(el[,1:2],directed=F)
+E(graph)$weight=(as.numeric(el[,3]))
+
+graph = simplify(graph,edge.attr.comb=list("mean")) # remove self loops and redundant edges. For redundant edges, it will reduce down to one and make the new weight the mean
+
+graph = delete.vertices(graph,which(degree(graph)<1)) # remove vertices with degrees less than 1
+
+l <- layout.fruchterman.reingold(graph)
+
+V(graph)$x <- l[,1]
+V(graph)$y <- l[,2]
+
+E(graph)$color <- ifelse(E(graph)$weight >= 0, "black", "red")
+
+# color palette
+phylumList = unique(tax_table(phyloTemp)[,"phylum"])
+phylumPalette = getPalette(length(phylumList))
+names(phylumPalette) = phylumList
+
+V(graph)$phylum=tax_table(phyloTemp)[,2][match(V(graph)$name, rownames(tax_table(phyloTemp)))]
+
+```
+
+```{r}
+par(mar=c(0,0,0,0))
+plot(graph,
+     #edge.width=(E(L2Sample.graph)$weight+0.5)^2,
+     #edge.color="black",
+     #vertex.color=as.factor(V(L2Sample.graph)$HOST),
+     vertex.label = NA,
+     vertex.size = 5,
+     vertex.color=phylumPalette[V(graph)$phylum]
+)
+```
+
+
+```{r}
+
+# Compute prevalence of each feature, store as data.frame
+prevdf = apply(X = otu_table(phyloTemp),
+               MARGIN = ifelse(taxa_are_rows(phyloTemp), yes = 1, no = 2),
+               FUN = function(x){sum(x > 0)})
+# Add taxonomy and total read counts to this data.frame
+prevdf = data.frame(Prevalence = prevdf,
+                    TotalAbundance = taxa_sums(phyloTemp),
+tax_table(phyloTemp))
+# Subset to the remaining phyla
+prevdf1 = subset(prevdf, phylum %in% get_taxa_unique(ps1, "Phylum"))
+ggplot(prevdf1, aes(TotalAbundance, Prevalence / nsamples(phyloTemp),color=Phylum)) +
+  # Include a guess for parameter
+geom_hline(yintercept = 0.05, alpha = 0.5, linetype = 2) + geom_point(size = 2, alpha = 0.7) + scale_x_log10() + xlab("Total Abundance") + ylab("Prevalence [Frac. Samples]") + facet_wrap(~Phylum) + theme(legend.position="none")
+
+# Execute prevalence  lter, using `prune_taxa()` function
+keepTaxa = rownames(prevdf1)[(prevdf1$Prevalence >= prevalenceThreshold)]
+ps2 = prune_taxa(keepTaxa, phyloTemp)
+
+# How many genera would be present after altering?
+length(get_taxa_unique(ps2, taxonomic.rank = "Genus"))
+
+
+```
+
