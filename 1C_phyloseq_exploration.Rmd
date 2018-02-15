@@ -1,0 +1,209 @@
+---
+title: "1C - Rhizosphere - Phyloseq & Exploration"
+date: "`r date()`"
+output: 
+  html_document:
+    lib_dir: libs
+    code_folding: hide
+    theme: spacelab
+    highlight: espresso
+    self_contained: no
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+---
+
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, warning=FALSE, message=FALSE, dev='png', fig.width=10)
+options(scipen=999)
+```
+
+# Load Packages
+
+```{r}
+library("RColorBrewer")
+library("phyloseq")
+library("ape")
+library("dplyr")
+library("ggplot2")
+library("gridExtra")
+library("xlsx")
+library("reshape2")
+library("vegan")
+library("ade4")
+
+theme_set(theme_bw())
+getPalette = colorRampPalette(brewer.pal(9, "Set1"))
+bluePalette = colorRampPalette(brewer.pal(8, "Blues"))
+```
+
+# Make Phyloseq Object
+
+```{r}
+otu_file = "~/Research/SMU/Rhizosphere/tom_otuTable.txt"
+tax_file = "~/Research/SMU/Rhizosphere/tom_classified50.txt"
+tree_file = "~/Research/SMU/Rhizosphere/tom_seqs.fa.aln.tre"
+
+map_file = read.xlsx("~/Research/SMU/Rhizosphere/sampleData.xlsx", sheetIndex = 1)
+rownames(map_file) = map_file$SAMPLE
+map = sample_data(map_file)
+
+otumat = read.table(otu_file, sep = "\t", header = T, row.names = 1)
+otumat = as.matrix(otumat)
+
+taxmat = read.table(tax_file, sep = "\t", header = T, row.names = 1)
+taxmat=as.matrix(taxmat)
+
+tree = read.tree(tree_file)
+
+OTU = otu_table(otumat, taxa_are_rows = TRUE)
+TAX = tax_table(taxmat)
+OTU_TAX = phyloseq(OTU, TAX)
+
+phyloTom = merge_phyloseq(OTU_TAX, map, tree)
+phyloTom.100  = transform_sample_counts(phyloTom, function(x) 100 * x/sum(x))
+
+minREADS = min(sample_sums(phyloTom))
+phyloTom.rare = rarefy_even_depth(phyloTom, sample.size = minREADS, rngseed = 19770909)
+
+save(phyloTom, phyloTom.100, phyloTom.rare, file = "~/Research/SMU/Rhizosphere/phyloObjects.Rda")
+```
+
+# Quick Phylum
+
+```{r}
+phylumGlom = tax_glom(phyloTom.100, "phylum")
+phylumGlom = filter_taxa(phylumGlom, function(x) sum(x >= 1) >= (1), TRUE)
+
+plot_bar(phylumGlom, fill = "phylum") +
+  facet_wrap(TREATMENT ~ LOCATION, scales = "free_x") +
+  scale_fill_manual(values = getPalette(11))
+```
+
+# Alpha-Diversity
+
+```{r}
+estimate_richness_full = function(phyloObject) {
+  rich = estimate_richness(phyloObject)
+  rich$ShannonEvenness = rich$Shannon / log(rich$Observed)
+  row.names(rich) = sub("\\.", "-", row.names(rich))
+  rich$SAMPLE = as.factor(row.names(rich))
+
+  sampleData = as.data.frame(sample_data(phyloObject))
+
+  rich = left_join(rich, sampleData, by = "SAMPLE")
+  row.names(rich) = rich$SAMPLE
+  rich
+}
+```
+
+```{r}
+rich = estimate_richness_full(phyloTom.rare)
+rich$ShannonEvenness = rich$Shannon / log(rich$Observed)
+rich = select(rich, TREATMENT, LOCATION, Observed, ShannonEvenness, SAMPLE)
+
+rich.m = melt(rich)
+rich.m$NAME = paste0(rich.m$LOCATION, "_", rich.m$TREATMENT)
+ggplot(rich.m, aes(x = NAME, y = value)) + 
+  geom_boxplot(aes(color = NAME)) + 
+  geom_point(aes(color = NAME)) + 
+  facet_wrap( ~ variable, ncol = 3, scales = "free") +
+  scale_color_manual(values = getPalette(4)) +
+  ggtitle("TAMU ") + 
+  theme(axis.text.x=element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+
+# Beta-Diversity
+
+```{r}
+ord <- ordinate(phyloTom, "NMDS", "wunifrac")
+plot_ordination(phyloTom, ord, color = "TREATMENT", shape = "LOCATION")
+```
+
+## PERMANOVA
+
+Make a permanova function
+
+```{r}
+permanova = function(phyloObject, group = "TYPE", metric = "jsd", palettePick = FALSE) {
+
+  sd = data.frame(sample_data(phyloObject))
+  sd = sd[group]
+  colnames(sd) = "GROUP"
+
+  palette = ""
+  if (palettePick[1] == FALSE) {
+    colorCount = length(unique(sd$GROUP))
+    palette = getPalette(colorCount)
+  } else{
+    palette = palettePick
+  }
+
+  distJSD = phyloseq::distance(phyloObject, metric)
+  adon.GROUP = adonis(distJSD ~ GROUP, sd)
+  GROUP.p = adon.GROUP$aov.tab$`Pr(>F)`[1]
+
+  jsd.pco = dudi.pco(cailliez(distJSD), scannf=F, nf=2)
+  df = cbind(jsd.pco$li, sd)
+  df = select(df, A1, A2, GROUP)
+  df.x = aggregate(A1 ~ GROUP, data = df, mean)
+  colnames(df.x) = c("GROUP", "X0")
+  df.y = aggregate(A2 ~ GROUP, data = df, mean)
+  colnames(df.y) = c("GROUP", "Y0")
+  df = left_join(df, df.x, by = "GROUP")
+  df = left_join(df, df.y, by = "GROUP")
+
+  p1 = ggplot(df, aes(x = A1, y = A2)) +
+    geom_segment(aes(x = X0, y = Y0, xend = A1, yend = A2, color = GROUP)) +
+    geom_point(pch = 21, color = "black", size = 5, aes(fill = GROUP)) +
+    scale_fill_manual(values = palette) +
+    scale_color_manual(values = palette)
+
+  list("plot" = p1,
+       "pval" = GROUP.p,
+       "group" = group,
+       "metric" = metric)
+}
+```
+
+### Treatment
+
+```{r}
+pTreatment = permanova(phyloTom, group = "TREATMENT", metric = "wunifrac")
+pTreatment$plot +
+  scale_fill_manual(values = getPalette(5)) +
+  ggtitle("TREATMENT Permanova", "wunifrac")
+```
+
+### Location
+
+```{r}
+pLocation = permanova(phyloTom, group = "LOCATION", metric = "wunifrac")
+pLocation$plot +
+  scale_fill_manual(values = getPalette(5)) +
+  ggtitle("LOCATION Permanova", "wunifrac")
+```
+
+### Treatment & Location
+
+```{r}
+pTL = permanova(phyloTom, group = "TL", metric = "wunifrac")
+pTL$plot +
+  scale_fill_manual(values = getPalette(5)) +
+  ggtitle("TREATMENT + LOCATION Permanova", "wunifrac")
+```
+
+### Summary
+
+Cluster | p-value
+--- | ---
+TREATMENT | `r pTreatment$pval`
+LOCATION | `r pLocation$pval`
+TL | `r pTL$pval`
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
